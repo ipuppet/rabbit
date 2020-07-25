@@ -1,8 +1,8 @@
 import cgi
 from enum import Enum
 
-from rabbit.http.server import Header, Server
-from rabbit.logger.logger import Logger
+from src.rabbit.http.server import Header, Server
+from src.rabbit import Logger
 
 
 def _to_unicode(string, encoding='utf-8'):

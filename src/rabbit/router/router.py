@@ -1,4 +1,4 @@
-from rabbit.http.request import Request
+from src.rabbit import Request
 
 
 class Router:

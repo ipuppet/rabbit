@@ -1,6 +1,6 @@
 from enum import Enum
 
-from rabbit.http.server import Header
+from src.rabbit.http.server import Header
 
 
 class HTTPStatus(Enum):

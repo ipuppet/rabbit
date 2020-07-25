@@ -1,8 +1,8 @@
 from wsgiref import simple_server
 
-from rabbit.http.request import RequestCreator
-from rabbit.http.response import Response
-from rabbit.router.router import Router
+from src.rabbit import RequestCreator
+from src.rabbit import Response
+from src.rabbit.router import Router
 
 
 class Kernel:
