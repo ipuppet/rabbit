@@ -1,4 +1,33 @@
+import cgi
 import re
+from abc import abstractmethod
+from enum import Enum
+from wsgiref import simple_server
+
+from .exceptions import ServerHandlerError
+
+
+class HTTPStatus(Enum):
+    HTTP_200 = '200 OK'
+    HTTP_201 = '201 Created'
+    HTTP_204 = '204 No Content'
+    HTTP_400 = '400 Bad Request'
+    HTTP_401 = '401 Unauthorized'
+    HTTP_403 = '403 Forbidden'
+    HTTP_404 = '404 Not Found'
+    HTTP_405 = '405 Method Not Allowed'
+    HTTP_500 = '500 Internal Server Error'
+
+
+class Method(Enum):
+    """
+    HTTP请求方法
+    """
+    GET = 'GET'
+    POST = 'POST'
+    PUT = 'PUT'
+    DELETE = 'DELETE'
+    OPTIONS = 'OPTIONS'
 
 
 class Header:
@@ -204,5 +233,189 @@ class Header:
         return cache_control
 
 
+def _to_unicode(string, encoding='utf-8'):
+    """转换字符编码
+
+    Args:
+        string: 待转换字符串
+        encoding: 编码
+
+    Returns:
+        转换后内容
+    """
+    return string.decode(encoding)
+
+
+class MultipartFile:
+    """
+    TODO 文件类
+    """
+
+    def __init__(self, storage):
+        self.filename = _to_unicode(storage.filename)
+        self.file = storage.file
+
+
+class Request:
+    """
+    HTTP请求
+    """
+    attributes: dict
+    cookie: dict
+    header: Header
+
+    request_uri: str
+    base_url: str
+    path_info: str
+    base_path: str
+    method: Method
+
+    def __init__(self):
+        """
+        初始化数据
+        """
+        self.attributes = self.__parse_attributes()
+        self.cookie = {}
+        self.header = Header()
+
+        self.request_uri = ''
+        self.base_url = ''
+        self.path_info = ''
+        self.base_path = ''
+        self.method = Method.GET
+
+    def __getitem__(self, key):
+        return self.get(key)
+
+    def get(self, key, default=None):
+        """取值
+
+        获取请求中的值，可提供默认值
+
+        Args:
+            key: 键
+            default: 默认值
+
+        Returns:
+            找到的值或提供的默认值
+        """
+        return self.attributes.get(key, default)
+
+    def has(self, key):
+        return key in self.attributes
+
+    @staticmethod
+    def __parse_attributes() -> dict:
+        """处理参数
+
+        Returns:
+            处理后的内容
+        """
+
+        def _convert(item):
+            if isinstance(item, list):
+                return [_to_unicode(i.value) for i in item]
+            if item.filename:
+                return MultipartFile(item)
+            return _to_unicode(item.value)
+
+        fs = cgi.FieldStorage()
+        attributes = {}
+        for key in fs:
+            attributes[key] = _convert(fs.getvalue(key))
+        return attributes
+
+    @staticmethod
+    def create_by_environ(environ):
+        """
+        通过environ创建一个Request类并返回
+        Args:
+            environ:
+
+        Returns:
+            Request()
+        """
+        request = Request()
+        # TODO 设定值
+        request.path_info = environ['PATH_INFO']
+        return request
+
+
+class Response:
+    content: str
+    http_status: HTTPStatus
+    header: Header
+    http_version: str
+
+    def __init__(self):
+        self.set('', HTTPStatus.HTTP_200)
+
+    def set(self, content: str, http_status: HTTPStatus = None, header: Header = None, http_version: str = '1.1'):
+        self.content = content
+        self.http_status = HTTPStatus.HTTP_200 if http_status is None else http_status
+        self.header = Header() if header is None else header
+        self.http_version = http_version
+
+
+class JsonResponse(Response):
+    def __init__(self):
+        super(JsonResponse, self).__init__()
+        super().header.set('Content-Type', 'application/json')
+
+    @property
+    def json(self) -> str:
+        """
+        获取json属性的值
+        Returns:
+            json字符串，就是父类的content属性的值
+        """
+        return self.content
+
+    @json.setter
+    def json(self, json_str: str):
+        """设置json属性的值
+
+        json字符串将会保存在父类content属性内
+
+        Args:
+            json_str: json字符串
+        """
+        self.content = json_str
+
+
+class ServerHandler:
+    @abstractmethod
+    @property
+    def request(self): pass
+
+    @abstractmethod
+    @request.setter
+    def request(self, request): pass
+
+    @abstractmethod
+    def handle(self) -> Response: pass
+
+
 class Server:
-    pass
+    port: int
+    server_handler: ServerHandler
+
+    def __init__(self, server_handler: ServerHandler = None):
+        self.port = 8080
+        self.server_handler = server_handler
+
+    def application(self, environ, start_response):
+        response = self.handle_request(environ)
+        start_response(response.http_status, response.header.get_tuple_list())
+        return [response.content]
+
+    def handle_request(self, environ) -> Response:
+        if self.server_handler is None:
+            raise ServerHandlerError('ServerHandler is None.')
+        self.server_handler.request = Request().create_by_environ(environ)
+        return self.server_handler.handle()
+
+    def run(self):
+        httpd = simple_server.make_server('', self.port, self.application)
+        print('Serving on port {}'.format(self.port))
+        httpd.serve_forever()
