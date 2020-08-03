@@ -5,24 +5,23 @@ from .http import Request
 
 class IRouter:
     @abstractmethod
-    def match(self): pass
+    def match(self) -> dict: pass
 
 
 class Router(IRouter):
-    __request: Request
+    request: Request
+    strict_mode: bool
+    default_token: str
 
-    @property
-    def request(self):
-        return self.__request
+    def __init__(self, request: Request):
+        self.request = request
+        self.strict_mode = False
+        self.default_token = r'([_0-9a-zA-Z\x{4e00}-\x{9fa5}]*)'
 
-    @request.setter
-    def request(self, request: Request):
-        self.__request = request
-
-    def match(self):
+    def match(self) -> dict:
         """TODO match
 
         Returns:
-
+            匹配结果
         """
         pass

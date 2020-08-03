@@ -1,10 +1,6 @@
-import cgi
 import re
-from abc import abstractmethod
 from enum import Enum
-from wsgiref import simple_server
-
-from .exceptions import ServerHandlerError
+from urllib.parse import quote, parse_qs
 
 
 class HTTPStatus(Enum):
@@ -17,17 +13,6 @@ class HTTPStatus(Enum):
     HTTP_404 = '404 Not Found'
     HTTP_405 = '405 Method Not Allowed'
     HTTP_500 = '500 Internal Server Error'
-
-
-class Method(Enum):
-    """
-    HTTP请求方法
-    """
-    GET = 'GET'
-    POST = 'POST'
-    PUT = 'PUT'
-    DELETE = 'DELETE'
-    OPTIONS = 'OPTIONS'
 
 
 class Header:
@@ -129,9 +114,13 @@ class Header:
 
         Args:
             headers: 需要添加的字段
+
+        Returns:
+            self
         """
         for key in headers:
             self.set(key, headers[key], False)
+        return self
 
     def __setitem__(self, key, value):
         self.set(key, value)
@@ -145,6 +134,9 @@ class Header:
             key: 字段
             values: 值
             replace: 是否替换
+
+        Returns:
+            self
         """
         key = self.__parse_key(key)
         if not self.has(key):
@@ -158,6 +150,7 @@ class Header:
             self.headers[key].append(values)
         if 'cache-control' == key:
             self.cache_control = self._parse_cache_control(', '.join(self.headers[key]))
+        return self
 
     def has(self, key) -> bool:
         """查询header中是否有该字段
@@ -233,56 +226,33 @@ class Header:
         return cache_control
 
 
-def _to_unicode(string, encoding='utf-8'):
-    """转换字符编码
-
-    Args:
-        string: 待转换字符串
-        encoding: 编码
-
-    Returns:
-        转换后内容
-    """
-    return string.decode(encoding)
-
-
-class MultipartFile:
-    """
-    TODO 文件类
-    """
-
-    def __init__(self, storage):
-        self.filename = _to_unicode(storage.filename)
-        self.file = storage.file
-
-
 class Request:
     """
     HTTP请求
     """
     attributes: dict
+    query: dict
     cookie: dict
     header: Header
 
-    request_uri: str
-    base_url: str
+    environ: dict
+    url_scheme: str
+    request_method: str
+    script_name: str
     path_info: str
-    base_path: str
-    method: Method
+    server_name: str
+    server_port: str
 
     def __init__(self):
         """
         初始化数据
         """
-        self.attributes = self.__parse_attributes()
         self.cookie = {}
         self.header = Header()
 
-        self.request_uri = ''
-        self.base_url = ''
         self.path_info = ''
-        self.base_path = ''
-        self.method = Method.GET
+        self.server_name = ''
+        self.request_method = 'GET'
 
     def __getitem__(self, key):
         return self.get(key)
@@ -304,26 +274,26 @@ class Request:
     def has(self, key):
         return key in self.attributes
 
-    @staticmethod
-    def __parse_attributes() -> dict:
-        """处理参数
+    def get_url(self):
+        url = self.environ['wsgi.url_scheme'] + '://'
 
-        Returns:
-            处理后的内容
-        """
+        if self.environ.get('HTTP_HOST'):
+            url += self.environ['HTTP_HOST']
+        else:
+            url += self.environ['SERVER_NAME']
 
-        def _convert(item):
-            if isinstance(item, list):
-                return [_to_unicode(i.value) for i in item]
-            if item.filename:
-                return MultipartFile(item)
-            return _to_unicode(item.value)
+            if self.environ['wsgi.url_scheme'] == 'https':
+                if self.environ['SERVER_PORT'] != '443':
+                    url += ':' + self.environ['SERVER_PORT']
+            else:
+                if self.environ['SERVER_PORT'] != '80':
+                    url += ':' + self.environ['SERVER_PORT']
 
-        fs = cgi.FieldStorage()
-        attributes = {}
-        for key in fs:
-            attributes[key] = _convert(fs.getvalue(key))
-        return attributes
+        url += quote(self.environ.get('SCRIPT_NAME', ''))
+        url += quote(self.environ.get('PATH_INFO', ''))
+        if self.environ.get('QUERY_STRING'):
+            url += '?' + self.environ['QUERY_STRING']
+        return url
 
     @staticmethod
     def create_by_environ(environ):
@@ -336,8 +306,23 @@ class Request:
             Request()
         """
         request = Request()
-        # TODO 设定值
+        request.url_scheme = environ['wsgi.url_scheme']
+        request.request_method = environ['REQUEST_METHOD']
+        request.script_name = environ['SCRIPT_NAME']
         request.path_info = environ['PATH_INFO']
+        request.server_name = environ['SERVER_NAME']
+        request.server_port = environ['SERVER_PORT']
+        if environ.get('QUERY_STRING'):
+            request.query = parse_qs(environ['QUERY_STRING'])
+        header = Header({
+            'Content-Type': environ['CONTENT_TYPE'],
+            'Content-Length': environ['CONTENT_LENGTH'],
+        })
+        headers = {}
+        for key, value in environ.items():
+            if key[0:4] == 'HTTP_':
+                headers[key] = value
+        request.header = header.add(headers)
         return request
 
 
@@ -381,41 +366,3 @@ class JsonResponse(Response):
             json_str: json字符串
         """
         self.content = json_str
-
-
-class ServerHandler:
-    @abstractmethod
-    @property
-    def request(self): pass
-
-    @abstractmethod
-    @request.setter
-    def request(self, request): pass
-
-    @abstractmethod
-    def handle(self) -> Response: pass
-
-
-class Server:
-    port: int
-    server_handler: ServerHandler
-
-    def __init__(self, server_handler: ServerHandler = None):
-        self.port = 8080
-        self.server_handler = server_handler
-
-    def application(self, environ, start_response):
-        response = self.handle_request(environ)
-        start_response(response.http_status, response.header.get_tuple_list())
-        return [response.content]
-
-    def handle_request(self, environ) -> Response:
-        if self.server_handler is None:
-            raise ServerHandlerError('ServerHandler is None.')
-        self.server_handler.request = Request().create_by_environ(environ)
-        return self.server_handler.handle()
-
-    def run(self):
-        httpd = simple_server.make_server('', self.port, self.application)
-        print('Serving on port {}'.format(self.port))
-        httpd.serve_forever()

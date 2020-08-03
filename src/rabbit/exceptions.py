@@ -1,5 +1,5 @@
-class ServerHandlerError(Exception):
+class ServerRequestError(Exception):
     """
-    未设置ServerHandler
+    未设置Request
     """
     pass
